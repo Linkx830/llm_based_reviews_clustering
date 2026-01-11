@@ -1,0 +1,126 @@
+# 示例运行配置
+# 命名规范: YYYYMMDD_<topic>_<scope>.yaml
+
+# 数据切片
+data_slice:
+  # main_category: "Appliances"  # 可选
+  parent_asin: "B0BGTBHC7P"  # 可选，如果指定则只处理该商品
+  time_window: null  # 可选: [start_timestamp, end_timestamp]
+  filters:
+    verified_purchase: null  # 可选: true/false
+    min_helpful_vote: null  # 可选: 最小有用票数
+  # limit: 1000  # 可选: 限制评论数量
+
+# 成本控制
+cost_control:
+  candidate_filter_threshold: 0.3  # 候选句过滤阈值
+  max_llm_calls: 10000  # 最大LLM调用数（硬限制）
+
+# 模型信息
+models:
+  # 抽取任务模型（用于AspectSentimentExtractorAgent，需要精确的结构化输出）
+  extraction_llm:
+    provider: "ollama"  # 或 "openai"
+    model: "qwen3:8b"  # Ollama 模型名称，或 OpenAI 模型名称
+    base_url: "http://localhost:11434"  # Ollama API 地址（可选，默认 localhost:11434）
+    temperature: 0.0  # 低温度，更精确的结构化输出
+    api_key: null  # OpenAI需要，Ollama不需要
+    enable_reasoning: false  # 是否启用reasoning模式（默认false，启用会增加推理时间但可能提高质量）
+  
+  # 洞察任务模型（用于ClusterInsightAgent，需要生成性文本）
+  insight_llm:
+    provider: "ollama"  # 或 "openai"
+    model: "qwen3:14b"  # 可以使用更大的模型，如 "qwen3:14b"
+    base_url: "http://localhost:11434"  # Ollama API 地址（可选，默认 localhost:11434）
+    temperature: 0.3  # 稍高温度，更有创造性
+    api_key: null  # OpenAI需要，Ollama不需要
+    enable_reasoning: false  # 是否启用reasoning模式（默认false，启用会增加推理时间但可能提高质量）
+  
+  # 向后兼容：如果没有指定extraction_llm或insight_llm，使用以下默认值
+  llm_provider: "ollama"  # 默认LLM提供商
+  llm_model: "qwen3:8b"  # 默认LLM模型
+  llm_base_url: "http://localhost:11434"  # 默认LLM API地址
+  enable_reasoning: false  # 默认LLM的reasoning模式（默认false）
+  
+  # Embedding模型配置
+  embedding_model: "qwen3-embedding:4b"  # Ollama embedding模型，或 sentence-transformers模型名称
+  embedding_base_url: "http://localhost:11434"  # Ollama API 地址（可选，默认 localhost:11434）
+  embedding_max_workers: 8  # Ollama并发请求数（默认4，可根据服务器性能调整，建议2-8）
+  embedding_batch_size: 32  # sentence-transformers批处理大小（默认32，Ollama时作为并发数使用）
+  embedding_mrl_dimensions: 512  # MRL维度裁剪（可选，如768/512/256，仅支持支持MRL的模型如Qwen3-Embedding）
+
+# Prompt版本
+prompts:
+  extraction: "v1.0"
+  insight: "v1.0"
+  judge_recheck: "v1.0"
+
+# 聚类配置（基于docs/聚类规范.md的两阶段聚类）
+# 系统实现：
+#   1. 阶段A：结构化输入（Aspect: {aspect_norm}\nIssue: {issue_norm}）
+#   2. 阶段B：两路向量（E_issue主向量 + E_aspect辅向量）+ MRL维度裁剪
+#   3. 阶段C1：Aspect分桶（合并同义aspect，相似度阈值默认0.85）
+#   4. 阶段C2：桶内Issue聚类（根据数据量自动选择HDBSCAN或Agglomerative）
+#   5. 阶段D：Reranker边界精修（可选，减少误聚/漏聚）
+#   6. 阶段E：簇后处理（噪点簇和小簇处理、medoid选择、质量指标计算）
+clustering:
+  # 聚类方法（可选，覆盖自动选择）
+  # method: "hdbscan"  # 可选：手动指定 "hdbscan" 或 "agglomerative"
+  
+  # HDBSCAN 参数（大数据集时使用）
+  # min_cluster_size: 5  # 默认自适应：max(10, n*0.005)
+  min_samples: 3  # 保守程度（默认3，越大越保守）
+  
+  # Agglomerative 参数（小数据集时使用）
+  # distance_threshold: 0.5  # 距离阈值（默认0.5，用于自动确定簇数）
+  # linkage: "average"  # 链接方式（默认"average"，支持cosine距离）
+  
+  # 新聚类规范参数（在IssueClusterAgent中配置）
+  # use_instruction: true  # 是否使用instruction-aware embedding（默认true）
+  # aspect_similarity_threshold: 0.85  # aspect同义合并的相似度阈值（默认0.85）
+  
+  # 阶段D：Reranker二次验证（可选，用于边界精修）
+  use_reranker: false  # 是否启用reranker二次验证（默认false）
+  reranker_model: "dengcao/Qwen3-Reranker-8B:Q5_K_M"  # Reranker模型名称（Ollama模型）
+  reranker_base_url: "http://localhost:11434"  # Reranker API地址（可选）
+  reranker_top_k: 50  # 每个样本的reranker候选数（默认50）
+  reranker_score_threshold: 0.6  # Reranker分数阈值（默认0.6，低于此值的边将被丢弃）
+  reranker_max_workers: 4  # Reranker并发数（默认4）
+  
+  # 阶段E：噪点簇和小簇后处理
+  # min_cluster_size: 2  # 最小簇大小（小于此值的簇将被处理，默认2）
+  # noise_adsorption_threshold: 0.7  # 噪点吸附到最近簇的相似度阈值（默认0.7）
+  # small_cluster_merge_threshold: 0.75  # 小簇合并的相似度阈值（默认0.75）
+
+# Judge配置（ExtractionJudgeAgent的aspect归一化策略）
+judge:
+  # 是否启用语义相似度匹配（需要embedding模型，会增加处理时间）
+  # 如果大模型输出的aspect经常不在词表中，建议启用此选项
+  use_semantic_matching: false  # 默认false，使用前4种策略（精确、部分、模糊、关键词匹配）
+  # 语义相似度阈值（0-1，默认0.7，相似度≥此值才匹配）
+  semantic_threshold: 0.7
+  
+  # 是否启用LLM辅助匹配（需要LLM模型，作为最后手段）
+  # 当词表太少导致匹配缺失时，可以调用本地部署的大模型进行转换
+  # 如果所有其他策略都失败，LLM会从词表中选择最合适的aspect，或判断是否为噪声
+  # **重要**：启用LLM匹配时，LLM有权创建新的aspect并自动添加到词表中
+  use_llm_matching: true  # 默认false，仅在必要时启用（会增加LLM调用成本）
+  # LLM匹配的置信度阈值（0-1，默认0.5，置信度≥此值才使用LLM匹配结果）
+  llm_confidence_threshold: 0.5
+  # LLM创建的新aspect会：
+  # - 自动添加到内存中的词表（本次运行有效）
+  # - 记录在ExtractionJudgeAgent的返回结果中（new_aspects和dynamic_synonyms字段）
+  # - 可以通过normalizer.get_new_aspects()和normalizer.get_dynamic_synonyms()获取
+  # 可选的专门用于judge任务的LLM配置（如果不配置，则复用extraction_llm）
+  # llm:
+  #   provider: "ollama"
+  #   model: "qwen3:8b"
+  #   base_url: "http://localhost:11434"
+  #   temperature: 0.0
+  #   enable_reasoning: false  # 是否启用reasoning模式（默认false）
+
+# Run元信息
+run:
+  run_id: null  # 自动生成
+  pipeline_version: "v1.0"
+

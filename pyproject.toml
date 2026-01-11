@@ -1,0 +1,28 @@
+[project]
+name = "project"
+version = "0.1.0"
+description = "基于电商评论的方面级情感分析、需求聚类与多Agent自动洞察系统"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "duckdb>=1.4.3",
+    "hdbscan>=0.8.41",
+    "jupyter>=1.1.1",
+    "langchain>=1.2.0",
+    "langchain-ollama>=1.0.1",
+    "pandas>=2.3.3",
+    "pydantic>=2.12.5",
+    "pytest>=9.0.2",
+    "python-dotenv>=1.2.1",
+    "pyyaml>=6.0.3",
+    "scikit-learn>=1.7.2",
+    "sentence-transformers>=5.2.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]

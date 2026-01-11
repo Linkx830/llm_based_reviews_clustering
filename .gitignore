@@ -1,0 +1,6 @@
+data
+.venv
+.cursor
+outputs
+main.ipynb
+__pycache__

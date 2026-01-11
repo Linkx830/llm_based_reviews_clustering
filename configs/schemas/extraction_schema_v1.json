@@ -1,0 +1,67 @@
+{
+  "type": "object",
+  "properties": {
+    "sentence_id": {
+      "type": "string",
+      "description": "句子ID"
+    },
+    "has_opinion": {
+      "type": "boolean",
+      "description": "是否包含观点"
+    },
+    "aspects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "aspect": {
+            "type": "string",
+            "description": "方面名称（名词短语）"
+          },
+          "sentiment": {
+            "type": "string",
+            "enum": ["positive", "negative", "neutral"],
+            "description": "情感"
+          },
+          "sentiment_score": {
+            "type": "number",
+            "description": "情感分数"
+          },
+          "issue": {
+            "type": "string",
+            "description": "具体问题描述"
+          },
+          "evidence_text": {
+            "type": "string",
+            "description": "证据文本"
+          },
+          "evidence_start_char": {
+            "type": "integer",
+            "description": "证据起始位置"
+          },
+          "evidence_end_char": {
+            "type": "integer",
+            "description": "证据结束位置"
+          },
+          "confidence": {
+            "type": "number",
+            "description": "置信度"
+          }
+        },
+        "required": ["aspect", "sentiment", "issue", "evidence_text"]
+      }
+    },
+    "language": {
+      "type": "string",
+      "default": "en"
+    },
+    "extraction_warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": ["sentence_id", "has_opinion", "aspects"]
+}
+
