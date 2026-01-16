@@ -327,7 +327,7 @@ table_manager.create_all_tables()
 
 ### 17. issue_clusters_traditional（传统问题簇表）
 
-存储传统方法的聚类归属结果，结构与`issue_clusters`一致。
+存储传统方法的聚类归属结果，结构与`issue_clusters`一致，包含`cluster_embedding`向量字段。
 
 ### 18. cluster_stats_traditional（传统簇统计表）
 

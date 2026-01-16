@@ -279,6 +279,7 @@
 - 从`aspect_sentiment_valid_traditional`读取数据
 - 写入`issue_clusters_traditional`和`cluster_stats_traditional`
 - 聚类算法和配置与主线完全一致（保证公平对比）
+- **向量存储**：传统模式也会自动保存聚类时使用的向量（E_issue向量）到`issue_clusters_traditional`表的`cluster_embedding`字段
 
 ## 传统方法Pipeline
 
