@@ -29,6 +29,16 @@ class ReportAssemblerAgent(BaseAgent):
             f"output_dir={output_dir}"
         )
         
+        # 判断是否使用传统模式
+        use_traditional = "traditional" in self.pipeline_version.lower()
+        if use_traditional:
+            logger.info("检测到传统模式，使用传统表")
+            reports_table = TableManager.CLUSTER_REPORTS_TRADITIONAL
+            stats_table = TableManager.CLUSTER_STATS_TRADITIONAL
+        else:
+            reports_table = TableManager.CLUSTER_REPORTS
+            stats_table = TableManager.CLUSTER_STATS
+        
         # 读取簇报告和统计信息（JOIN cluster_stats获取聚类效果参数）
         clusters_query = f"""
             SELECT 
@@ -50,8 +60,8 @@ class ReportAssemblerAgent(BaseAgent):
                 cs.sentiment_consistency,
                 cs.top_terms,
                 cs.representative_sentence_ids
-            FROM {TableManager.CLUSTER_REPORTS} cr
-            LEFT JOIN {TableManager.CLUSTER_STATS} cs
+            FROM {reports_table} cr
+            LEFT JOIN {stats_table} cs
                 ON cr.run_id = cs.run_id 
                 AND cr.aspect_norm = cs.aspect_norm 
                 AND cr.cluster_id = cs.cluster_id

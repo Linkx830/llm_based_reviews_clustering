@@ -65,6 +65,8 @@ class IssueClusterAgent(BaseAgent):
         min_cluster_size: int = 2,  # 最小簇大小（小于此值的簇将被处理）
         noise_adsorption_threshold: float = 0.7,  # 噪点吸附到最近簇的相似度阈值
         small_cluster_merge_threshold: float = 0.75,  # 小簇合并的相似度阈值
+        # 传统模式支持
+        use_traditional_mode: bool = False,  # 是否使用传统模式（从传统表读取，写入传统表）
         **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -84,6 +86,7 @@ class IssueClusterAgent(BaseAgent):
         self.min_cluster_size = min_cluster_size
         self.noise_adsorption_threshold = noise_adsorption_threshold
         self.small_cluster_merge_threshold = small_cluster_merge_threshold
+        self.use_traditional_mode = use_traditional_mode
         
         self.embedding_tool = EmbeddingTool(
             embedding_model, 
@@ -599,10 +602,19 @@ class IssueClusterAgent(BaseAgent):
             f"embedding_model={self.embedding_model}"
         )
         
-        # 读取VALID记录
+        # 读取VALID记录（根据模式选择表）
+        if self.use_traditional_mode:
+            input_table = TableManager.ASPECT_SENTIMENT_VALID_TRADITIONAL
+            output_clusters_table = TableManager.ISSUE_CLUSTERS_TRADITIONAL
+            output_stats_table = TableManager.CLUSTER_STATS_TRADITIONAL
+        else:
+            input_table = TableManager.ASPECT_SENTIMENT_VALID
+            output_clusters_table = TableManager.ISSUE_CLUSTERS
+            output_stats_table = TableManager.CLUSTER_STATS
+        
         query = f"""
             SELECT sentence_id, aspect_norm, issue_norm, sentiment
-            FROM {TableManager.ASPECT_SENTIMENT_VALID}
+            FROM {input_table}
             WHERE run_id = ? AND validity_label = 'VALID'
         """
         valid_records = self.db.execute_read(query, [self.run_id])
@@ -613,7 +625,7 @@ class IssueClusterAgent(BaseAgent):
             return {
                 "status": "success",
                 "cluster_count": 0,
-                "table": TableManager.ISSUE_CLUSTERS
+                "table": output_clusters_table
             }
         
         # 解析记录
@@ -657,7 +669,15 @@ class IssueClusterAgent(BaseAgent):
             instruction=issue_instruction,
             normalize=True
         )
-        logger.info(f"E_issue向量生成完成，维度: {unique_issue_vectors.shape[1]}")
+        embedding_dim = unique_issue_vectors.shape[1]
+        logger.info(f"E_issue向量生成完成，维度: {embedding_dim}")
+        
+        # 确保表结构包含向量字段
+        table_manager = TableManager(self.db)
+        if self.use_traditional_mode:
+            table_manager.create_issue_clusters_traditional_table(embedding_dim=embedding_dim)
+        else:
+            table_manager.create_issue_clusters_table(embedding_dim=embedding_dim)
         
         # 生成E_aspect向量（辅向量）
         aspect_instruction = self.aspect_instruction if self.use_instruction else None
@@ -885,7 +905,7 @@ class IssueClusterAgent(BaseAgent):
         }
         clustering_config_id = json.dumps(final_config_with_meta, sort_keys=True)
         
-        # 插入issue_clusters
+        # 插入issue_clusters（根据模式选择表）
         for idx, (sentence_id, aspect_norm, issue_norm, sentiment, label) in enumerate(
             zip(all_sentence_ids, all_aspect_norms, all_issue_norms, all_sentiments, all_labels)
         ):
@@ -893,14 +913,21 @@ class IssueClusterAgent(BaseAgent):
             cluster_id = str(label) if not is_noise else "noise"
             cluster_key_text = self._build_cluster_text(aspect_norm, issue_norm)
             
+            # 获取对应的向量（用于聚类的主向量）
+            cluster_embedding = all_vectors[idx]
+            
+            # 包含向量字段的插入
             insert_query = f"""
-                INSERT INTO {table_manager.ISSUE_CLUSTERS}
+                INSERT INTO {output_clusters_table}
                 (run_id, pipeline_version, data_slice_id, created_at,
                  embedding_model, clustering_config_id,
                  aspect_norm, cluster_id, sentence_id,
-                 cluster_key_text, issue_norm, sentiment, is_noise)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 cluster_key_text, issue_norm, sentiment, is_noise,
+                 cluster_embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
+            # 将numpy数组转换为Python列表（DuckDB需要）
+            embedding_list = cluster_embedding.tolist()
             self.db.execute_write(insert_query, {
                 "run_id": self.run_id,
                 "pipeline_version": self.pipeline_version,
@@ -914,15 +941,16 @@ class IssueClusterAgent(BaseAgent):
                 "cluster_key_text": cluster_key_text,
                 "issue_norm": issue_norm,
                 "sentiment": sentiment,
-                "is_noise": is_noise
+                "is_noise": is_noise,
+                "cluster_embedding": embedding_list
             })
         
         logger.info(f"已插入 {len(all_sentence_ids)} 条聚类归属记录")
         
-        # 插入cluster_stats
+        # 插入cluster_stats（根据模式选择表）
         for cluster_id, stats in cluster_stats.items():
             insert_query = f"""
-                INSERT INTO {table_manager.CLUSTER_STATS}
+                INSERT INTO {output_stats_table}
                 (run_id, pipeline_version, data_slice_id, created_at,
                  aspect_norm, cluster_id, cluster_size, neg_ratio,
                  intra_cluster_distance, inter_cluster_distance, separation_ratio,
@@ -965,5 +993,5 @@ class IssueClusterAgent(BaseAgent):
         return {
             "status": "success",
             "cluster_count": len(cluster_stats),
-            "table": table_manager.ISSUE_CLUSTERS
+            "table": output_clusters_table
         }

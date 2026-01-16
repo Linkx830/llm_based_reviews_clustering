@@ -11,6 +11,9 @@ from .issue_cluster_agent import IssueClusterAgent
 from .cluster_insight_agent import ClusterInsightAgent
 from .report_assembler_agent import ReportAssemblerAgent
 from .evaluation_agent import EvaluationAgent
+from .traditional_aspect_sentiment_extractor_agent import TraditionalAspectSentimentExtractorAgent
+from .traditional_extraction_judge_agent import TraditionalExtractionJudgeAgent
+from .traditional_cluster_insight_agent import TraditionalClusterInsightAgent
 
 __all__ = [
     "DataSelectorAgent",
@@ -24,5 +27,8 @@ __all__ = [
     "ClusterInsightAgent",
     "ReportAssemblerAgent",
     "EvaluationAgent",
+    "TraditionalAspectSentimentExtractorAgent",
+    "TraditionalExtractionJudgeAgent",
+    "TraditionalClusterInsightAgent",
 ]
 

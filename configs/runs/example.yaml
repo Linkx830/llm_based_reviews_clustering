@@ -4,7 +4,7 @@
 # 数据切片
 data_slice:
   # main_category: "Appliances"  # 可选
-  parent_asin: "B0BGTBHC7P"  # 可选，如果指定则只处理该商品
+  parent_asin: "B08YZ4YYRX"  # 可选，如果指定则只处理该商品
   time_window: null  # 可选: [start_timestamp, end_timestamp]
   filters:
     verified_purchase: null  # 可选: true/false

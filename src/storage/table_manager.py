@@ -30,6 +30,14 @@ class TableManager:
     EVALUATION_METRICS = "evaluation_metrics"
     RUN_LOG = "run_log"
     
+    # 传统方法专用表
+    ASPECT_SENTIMENT_RAW_TRADITIONAL = "aspect_sentiment_raw_traditional"
+    ASPECT_SENTIMENT_VALID_TRADITIONAL = "aspect_sentiment_valid_traditional"
+    EXTRACTION_ISSUES_TRADITIONAL = "extraction_issues_traditional"
+    ISSUE_CLUSTERS_TRADITIONAL = "issue_clusters_traditional"
+    CLUSTER_STATS_TRADITIONAL = "cluster_stats_traditional"
+    CLUSTER_REPORTS_TRADITIONAL = "cluster_reports_traditional"
+    
     def __init__(self, db_conn: DuckDBConnection):
         self.db = db_conn
     
@@ -58,6 +66,13 @@ class TableManager:
         self.create_cluster_reports_table()
         self.create_evaluation_metrics_table()
         self.create_run_log_table()
+        # 传统方法专用表
+        self.create_aspect_sentiment_raw_traditional_table()
+        self.create_aspect_sentiment_valid_traditional_table()
+        self.create_extraction_issues_traditional_table()
+        self.create_issue_clusters_traditional_table()
+        self.create_cluster_stats_traditional_table()
+        self.create_cluster_reports_traditional_table()
     
     def create_selected_reviews_table(self):
         """创建selected_reviews表"""
@@ -206,8 +221,13 @@ class TableManager:
         """
         self.db.create_table_if_not_exists(self.EXTRACTION_ISSUES, schema)
     
-    def create_issue_clusters_table(self):
-        """创建issue_clusters表"""
+    def create_issue_clusters_table(self, embedding_dim: Optional[int] = None):
+        """
+        创建issue_clusters表
+        
+        Args:
+            embedding_dim: embedding向量维度（可选，如果提供则添加向量字段）
+        """
         schema = """
             run_id VARCHAR NOT NULL,
             pipeline_version VARCHAR NOT NULL,
@@ -223,7 +243,27 @@ class TableManager:
             sentiment VARCHAR NOT NULL,
             is_noise BOOLEAN
         """
+        # 如果指定了embedding维度，添加向量字段
+        if embedding_dim is not None:
+            schema += f",\n            cluster_embedding FLOAT[{embedding_dim}]"
+        
         self.db.create_table_if_not_exists(self.ISSUE_CLUSTERS, schema)
+        
+        # 如果表已存在且需要添加向量字段，尝试添加列（如果不存在）
+        if embedding_dim is not None:
+            try:
+                # 直接尝试添加列，如果列已存在会抛出异常，捕获并忽略
+                alter_query = f"ALTER TABLE {self.ISSUE_CLUSTERS} ADD COLUMN cluster_embedding FLOAT[{embedding_dim}]"
+                self.db.execute_write(alter_query)
+            except Exception as e:
+                # 如果添加列失败（可能是列已存在或其他原因），记录调试信息但不中断
+                from ..utils.logger import get_logger
+                logger = get_logger(__name__)
+                error_msg = str(e).lower()
+                if "already exists" in error_msg or "duplicate" in error_msg:
+                    logger.debug(f"cluster_embedding列已存在，跳过添加")
+                else:
+                    logger.warning(f"添加cluster_embedding列时出现警告: {e}")
     
     def create_cluster_stats_table(self):
         """创建cluster_stats表"""
@@ -297,6 +337,149 @@ class TableManager:
             message VARCHAR
         """
         self.db.create_table_if_not_exists(self.RUN_LOG, schema)
+    
+    def create_aspect_sentiment_raw_traditional_table(self):
+        """创建aspect_sentiment_raw_traditional表"""
+        schema = """
+            run_id VARCHAR NOT NULL,
+            pipeline_version VARCHAR NOT NULL,
+            data_slice_id VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            sentence_id VARCHAR NOT NULL,
+            extract_method VARCHAR NOT NULL,
+            aspect_raw VARCHAR NOT NULL,
+            issue_raw VARCHAR NOT NULL,
+            sentiment VARCHAR NOT NULL,
+            sentiment_score DOUBLE,
+            evidence_text VARCHAR NOT NULL,
+            debug_features JSON
+        """
+        self.db.create_table_if_not_exists(self.ASPECT_SENTIMENT_RAW_TRADITIONAL, schema)
+    
+    def create_aspect_sentiment_valid_traditional_table(self):
+        """创建aspect_sentiment_valid_traditional表"""
+        schema = """
+            run_id VARCHAR NOT NULL,
+            pipeline_version VARCHAR NOT NULL,
+            data_slice_id VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            sentence_id VARCHAR NOT NULL,
+            review_pk VARCHAR NOT NULL,
+            parent_asin VARCHAR NOT NULL,
+            timestamp INTEGER NOT NULL,
+            rating DOUBLE NOT NULL,
+            aspect_raw VARCHAR NOT NULL,
+            aspect_norm VARCHAR NOT NULL,
+            sentiment VARCHAR NOT NULL,
+            sentiment_score DOUBLE,
+            issue_raw VARCHAR NOT NULL,
+            issue_norm VARCHAR NOT NULL,
+            evidence_text VARCHAR NOT NULL,
+            validity_label VARCHAR NOT NULL,
+            quality_flags VARCHAR
+        """
+        self.db.create_table_if_not_exists(self.ASPECT_SENTIMENT_VALID_TRADITIONAL, schema)
+    
+    def create_extraction_issues_traditional_table(self):
+        """创建extraction_issues_traditional表"""
+        schema = """
+            run_id VARCHAR NOT NULL,
+            pipeline_version VARCHAR NOT NULL,
+            data_slice_id VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            sentence_id VARCHAR NOT NULL,
+            issue_type VARCHAR NOT NULL,
+            details VARCHAR,
+            needs_recheck BOOLEAN
+        """
+        self.db.create_table_if_not_exists(self.EXTRACTION_ISSUES_TRADITIONAL, schema)
+    
+    def create_issue_clusters_traditional_table(self, embedding_dim: Optional[int] = None):
+        """
+        创建issue_clusters_traditional表
+        
+        Args:
+            embedding_dim: embedding向量维度（可选，如果提供则添加向量字段）
+        """
+        schema = """
+            run_id VARCHAR NOT NULL,
+            pipeline_version VARCHAR NOT NULL,
+            data_slice_id VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            embedding_model VARCHAR NOT NULL,
+            clustering_config_id VARCHAR NOT NULL,
+            aspect_norm VARCHAR NOT NULL,
+            cluster_id VARCHAR NOT NULL,
+            sentence_id VARCHAR NOT NULL,
+            cluster_key_text VARCHAR NOT NULL,
+            issue_norm VARCHAR NOT NULL,
+            sentiment VARCHAR NOT NULL,
+            is_noise BOOLEAN
+        """
+        # 如果指定了embedding维度，添加向量字段
+        if embedding_dim is not None:
+            schema += f",\n            cluster_embedding FLOAT[{embedding_dim}]"
+        
+        self.db.create_table_if_not_exists(self.ISSUE_CLUSTERS_TRADITIONAL, schema)
+        
+        # 如果表已存在且需要添加向量字段，尝试添加列（如果不存在）
+        if embedding_dim is not None:
+            try:
+                # 直接尝试添加列，如果列已存在会抛出异常，捕获并忽略
+                alter_query = f"ALTER TABLE {self.ISSUE_CLUSTERS_TRADITIONAL} ADD COLUMN cluster_embedding FLOAT[{embedding_dim}]"
+                self.db.execute_write(alter_query)
+            except Exception as e:
+                # 如果添加列失败（可能是列已存在或其他原因），记录调试信息但不中断
+                from ..utils.logger import get_logger
+                logger = get_logger(__name__)
+                error_msg = str(e).lower()
+                if "already exists" in error_msg or "duplicate" in error_msg:
+                    logger.debug(f"cluster_embedding列已存在，跳过添加")
+                else:
+                    logger.warning(f"添加cluster_embedding列时出现警告: {e}")
+    
+    def create_cluster_stats_traditional_table(self):
+        """创建cluster_stats_traditional表"""
+        schema = """
+            run_id VARCHAR NOT NULL,
+            pipeline_version VARCHAR NOT NULL,
+            data_slice_id VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            aspect_norm VARCHAR NOT NULL,
+            cluster_id VARCHAR NOT NULL,
+            cluster_size INTEGER NOT NULL,
+            neg_ratio DOUBLE NOT NULL,
+            intra_cluster_distance DOUBLE,
+            inter_cluster_distance DOUBLE,
+            separation_ratio DOUBLE,
+            cohesion DOUBLE,
+            cluster_confidence DOUBLE,
+            sentiment_consistency DOUBLE,
+            recent_trend JSON,
+            top_terms JSON,
+            representative_sentence_ids JSON NOT NULL
+        """
+        self.db.create_table_if_not_exists(self.CLUSTER_STATS_TRADITIONAL, schema)
+    
+    def create_cluster_reports_traditional_table(self):
+        """创建cluster_reports_traditional表"""
+        schema = """
+            run_id VARCHAR NOT NULL,
+            pipeline_version VARCHAR NOT NULL,
+            data_slice_id VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            method_version VARCHAR NOT NULL,
+            aspect_norm VARCHAR NOT NULL,
+            cluster_id VARCHAR NOT NULL,
+            cluster_name VARCHAR NOT NULL,
+            summary VARCHAR NOT NULL,
+            priority VARCHAR NOT NULL,
+            priority_rationale VARCHAR,
+            evidence_items JSON NOT NULL,
+            action_items JSON NOT NULL,
+            confidence DOUBLE
+        """
+        self.db.create_table_if_not_exists(self.CLUSTER_REPORTS_TRADITIONAL, schema)
     
     def get_run_view_query(self, table_name: str, run_id: str) -> str:
         """生成run_id过滤视图查询"""

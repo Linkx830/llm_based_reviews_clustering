@@ -37,6 +37,10 @@ table_manager.create_all_tables()
 
 ## 数据表结构说明
 
+### 主线表（LLM方法）
+
+主线表用于LLM方法的流水线，包括以下表：
+
 ### 1. selected_reviews（选中的评论表）
 
 存储从数据源筛选出的原始评论数据。
@@ -211,6 +215,7 @@ table_manager.create_all_tables()
 | issue_norm | VARCHAR | 是 | 规范化后的问题描述 |
 | sentiment | VARCHAR | 是 | 情感标签 |
 | is_noise | BOOLEAN | 否 | 是否为噪声点 |
+| cluster_embedding | FLOAT[N] | 否 | 聚类时使用的向量（E_issue向量，N为向量维度，由embedding_tool自动检测，支持降维） |
 
 ### 10. cluster_stats（簇统计表）
 
@@ -288,4 +293,68 @@ table_manager.create_all_tables()
 | started_at | TIMESTAMP | 是 | 开始时间 |
 | finished_at | TIMESTAMP | 否 | 结束时间 |
 | message | VARCHAR | 否 | 日志消息 |
+
+## 传统方法表（Traditional Baseline，无LLM）
+
+传统方法表用于不使用LLM的baseline流水线，与主线表一一对应，使用`_traditional`后缀区分。
+
+### 14. aspect_sentiment_raw_traditional（传统原始抽取表）
+
+存储传统NLP方法抽取的aspect和sentiment结果。
+
+| 字段名 | 类型 | 是否必填 | 说明 |
+|--------|------|----------|------|
+| run_id | VARCHAR | 是 | 运行ID |
+| pipeline_version | VARCHAR | 是 | 流水线版本号 |
+| data_slice_id | VARCHAR | 是 | 数据切片ID |
+| created_at | TIMESTAMP | 是 | 记录创建时间 |
+| sentence_id | VARCHAR | 是 | 句子ID |
+| extract_method | VARCHAR | 是 | 抽取方法（LEXICON_RULE/WEAK_SUPERVISED/HYBRID） |
+| aspect_raw | VARCHAR | 是 | 原始aspect |
+| issue_raw | VARCHAR | 是 | 原始issue |
+| sentiment | VARCHAR | 是 | 情感（positive/negative/neutral） |
+| sentiment_score | DOUBLE | 否 | 情感分数 |
+| evidence_text | VARCHAR | 是 | 证据文本（可定位） |
+| debug_features | JSON | 否 | 调试信息（命中的规则/模板/关键词） |
+
+### 15. aspect_sentiment_valid_traditional（传统验证表）
+
+存储经过校验和归一化的传统抽取结果，结构与`aspect_sentiment_valid`一致。
+
+### 16. extraction_issues_traditional（传统提取问题表）
+
+存储传统抽取过程中的问题和错误，结构与`extraction_issues`一致。
+
+### 17. issue_clusters_traditional（传统问题簇表）
+
+存储传统方法的聚类归属结果，结构与`issue_clusters`一致。
+
+### 18. cluster_stats_traditional（传统簇统计表）
+
+存储传统方法的簇统计信息，结构与`cluster_stats`一致。
+
+### 19. cluster_reports_traditional（传统簇报告表）
+
+存储传统方法的模板化洞察报告。
+
+| 字段名 | 类型 | 是否必填 | 说明 |
+|--------|------|----------|------|
+| run_id | VARCHAR | 是 | 运行ID |
+| pipeline_version | VARCHAR | 是 | 流水线版本号 |
+| data_slice_id | VARCHAR | 是 | 数据切片ID |
+| created_at | TIMESTAMP | 是 | 记录创建时间 |
+| method_version | VARCHAR | 是 | 传统方法版本号 |
+| aspect_norm | VARCHAR | 是 | 归一化aspect |
+| cluster_id | VARCHAR | 是 | 簇ID |
+| cluster_name | VARCHAR | 是 | 簇名称 |
+| summary | VARCHAR | 是 | 摘要 |
+| priority | VARCHAR | 是 | 优先级（high/medium/low） |
+| priority_rationale | VARCHAR | 否 | 优先级依据 |
+| evidence_items | JSON | 是 | 证据条目列表 |
+| action_items | JSON | 是 | 建议条目列表 |
+| confidence | DOUBLE | 否 | 置信度（基于规则估算） |
+
+## 表创建
+
+所有表（包括传统方法表）通过`TableManager.create_all_tables()`统一创建。
 

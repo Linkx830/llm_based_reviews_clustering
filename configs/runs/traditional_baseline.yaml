@@ -1,0 +1,159 @@
+# 传统Baseline运行配置（Traditional Baseline，不使用LLM）
+# 命名规范: YYYYMMDD_<topic>_<scope>.yaml
+# 用途：与LLM方法进行公平对比的baseline
+
+# 数据切片（与LLM方法保持一致，保证公平对比）
+data_slice:
+  # main_category: "Appliances"  # 可选
+  parent_asin: "B00GN92KQ4"  # 可选，如果指定则只处理该商品
+  time_window: null  # 可选: [start_timestamp, end_timestamp]
+  filters:
+    verified_purchase: null  # 可选: true/false
+    min_helpful_vote: null  # 可选: 最小有用票数
+  # limit: 1000  # 可选: 限制评论数量
+
+# 成本控制（传统方法不需要LLM调用，但保留此配置块以保持一致性）
+cost_control:
+  candidate_filter_threshold: 0.3  # 候选句过滤阈值
+  max_llm_calls: 0  # 传统方法不使用LLM，设为0
+
+# 模型信息（传统方法只需要embedding模型，不需要LLM）
+models:
+  # Embedding模型配置（用于聚类，必须与LLM方法保持一致以保证公平对比）
+  embedding_model: "qwen3-embedding:4b"  # Ollama embedding模型，或 sentence-transformers模型名称
+  embedding_base_url: "http://localhost:11434"  # Ollama API 地址（可选，默认 localhost:11434）
+  embedding_max_workers: 8  # Ollama并发请求数（默认4，可根据服务器性能调整，建议2-8）
+  embedding_batch_size: 32  # sentence-transformers批处理大小（默认32，Ollama时作为并发数使用）
+  embedding_mrl_dimensions: 512  # MRL维度裁剪（可选，如768/512/256，仅支持支持MRL的模型如Qwen3-Embedding）
+
+# Prompt版本（传统方法不使用prompt，但保留此配置块以保持一致性）
+prompts:
+  extraction: "v1.0"  # 不使用，但保留
+  insight: "v1.0"  # 不使用，但保留
+  judge_recheck: "v1.0"  # 不使用，但保留
+
+# 聚类配置（必须与LLM方法保持一致，保证公平对比）
+# 系统实现：
+#   1. 阶段A：结构化输入（Aspect: {aspect_norm}\nIssue: {issue_norm}）
+#   2. 阶段B：两路向量（E_issue主向量 + E_aspect辅向量）+ MRL维度裁剪
+#   3. 阶段C1：Aspect分桶（合并同义aspect，相似度阈值默认0.85）
+#   4. 阶段C2：桶内Issue聚类（根据数据量自动选择HDBSCAN或Agglomerative）
+#   5. 阶段D：Reranker边界精修（可选，减少误聚/漏聚）
+#   6. 阶段E：簇后处理（噪点簇和小簇处理、medoid选择、质量指标计算）
+clustering:
+  # 聚类方法（可选，覆盖自动选择）
+  # method: "hdbscan"  # 可选：手动指定 "hdbscan" 或 "agglomerative"
+  
+  # HDBSCAN 参数（大数据集时使用）
+  # min_cluster_size: 5  # 默认自适应：max(10, n*0.005)
+  min_samples: 3  # 保守程度（默认3，越大越保守）
+  
+  # Agglomerative 参数（小数据集时使用）
+  # distance_threshold: 0.5  # 距离阈值（默认0.5，用于自动确定簇数）
+  # linkage: "average"  # 链接方式（默认"average"，支持cosine距离）
+  
+  # 新聚类规范参数（在IssueClusterAgent中配置）
+  # use_instruction: true  # 是否使用instruction-aware embedding（默认true）
+  # aspect_similarity_threshold: 0.85  # aspect同义合并的相似度阈值（默认0.85）
+  
+  # 阶段D：Reranker二次验证（可选，为公平对比建议与LLM方法保持一致）
+  use_reranker: false  # 是否启用reranker二次验证（默认false，建议与LLM方法保持一致）
+  reranker_model: "dengcao/Qwen3-Reranker-8B:Q5_K_M"  # Reranker模型名称（Ollama模型）
+  reranker_base_url: "http://localhost:11434"  # Reranker API地址（可选）
+  reranker_top_k: 50  # 每个样本的reranker候选数（默认50）
+  reranker_score_threshold: 0.6  # Reranker分数阈值（默认0.6，低于此值的边将被丢弃）
+  reranker_max_workers: 4  # Reranker并发数（默认4）
+  
+  # 阶段E：噪点簇和小簇后处理
+  # min_cluster_size: 2  # 最小簇大小（小于此值的簇将被处理，默认2）
+  # noise_adsorption_threshold: 0.7  # 噪点吸附到最近簇的相似度阈值（默认0.7）
+  # small_cluster_merge_threshold: 0.75  # 小簇合并的相似度阈值（默认0.75）
+
+# Judge配置（TraditionalExtractionJudgeAgent的aspect归一化策略）
+judge:
+  # 是否启用语义相似度匹配（需要embedding模型，会增加处理时间）
+  # 如果传统抽取的aspect经常不在词表中，建议启用此选项
+  use_semantic_matching: false  # 默认false，使用前4种策略（精确、部分、模糊、关键词匹配）
+  # 语义相似度阈值（0-1，默认0.7，相似度≥此值才匹配）
+  semantic_threshold: 0.7
+  # 注意：传统方法不使用LLM辅助匹配
+
+# 传统方法配置（Traditional Baseline专用配置）
+traditional:
+  # 抽取配置（TraditionalAspectSentimentExtractorAgent）
+  extraction:
+    # 抽取方法
+    method: "LEXICON_RULE"  # 可选: "LEXICON_RULE" | "WEAK_SUPERVISED" | "HYBRID"
+    # 当前仅支持 "LEXICON_RULE"（基于情感词典的规则方法）
+    
+    # Aspect种子词表（可选，如果不指定则使用默认词表）
+    # aspect_seed_lexicon:
+    #   - "battery"
+    #   - "screen"
+    #   - "size"
+    #   - "quality"
+    #   - "price"
+    #   - "design"
+    #   - "performance"
+    #   - "speed"
+    #   - "weight"
+    #   - "durability"
+    #   - "sound"
+    #   - "camera"
+    #   - "display"
+    #   - "storage"
+    #   - "memory"
+    #   - "processor"
+    #   - "build"
+    #   - "material"
+    #   - "comfort"
+    #   - "usability"
+    #   - "interface"
+    
+    # 是否使用元数据约束（提升在product_title/features中出现的aspect优先级）
+    use_meta_context: true  # 默认true
+    
+    # 每句最大候选aspect数
+    max_candidates_per_sentence: 5  # 默认5
+  
+  # Judge配置（TraditionalExtractionJudgeAgent）
+  judge:
+    # 是否启用语义相似度匹配（需要embedding模型）
+    use_semantic_matching: false  # 默认false
+    # 语义相似度阈值（0-1，默认0.7）
+    semantic_threshold: 0.7
+  
+  # 洞察配置（TraditionalClusterInsightAgent）
+  insight:
+    # 方法版本号（用于记录和审计）
+    method_version: "v1.0"  # 默认"v1.0"
+    
+    # 证据条数（从representative_sentence_ids中提取）
+    evidence_count: 5  # 默认5
+    
+    # Action规则表（可选，自定义关键词→建议映射）
+    # 如果不指定，则使用默认规则表（battery→优化电池续航、screen→改进屏幕显示等）
+    # action_rule_table:
+    #   "battery":
+    #     action: "优化电池续航和充电速度"
+    #     owner_team: "product"
+    #     expected_impact: "提升用户满意度，减少退货率"
+    #     validation_plan: "A/B测试新电池方案，收集用户反馈"
+    #   "screen":
+    #     action: "改进屏幕显示质量和耐用性"
+    #     owner_team: "design"
+    #     expected_impact: "提升产品竞争力"
+    #     validation_plan: "抽检屏幕质量，对比竞品"
+    #   "default":
+    #     action: "深入调研用户反馈，制定改进计划"
+    #     owner_team: "product"
+    #     expected_impact: "提升用户满意度"
+    #     validation_plan: "用户访谈，数据分析"
+
+# Run元信息
+run:
+  run_id: null  # 自动生成
+  pipeline_version: "traditional_v1.0"  # 传统方法pipeline版本
+  use_traditional: true  # 启用传统baseline模式（关键配置）
+
+

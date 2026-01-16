@@ -24,11 +24,16 @@ class EvaluationAgent(BaseAgent):
         """计算评估指标"""
         logger.info(f"开始执行EvaluationAgent，run_id={self.run_id}")
         
+        # 判断是否使用传统模式
+        use_traditional = "traditional" in self.pipeline_version.lower()
+        if use_traditional:
+            logger.info("检测到传统模式，使用传统表")
+        
         metrics = {}
         
         # 覆盖率指标
         logger.info("计算覆盖率指标...")
-        metrics.update(self._compute_coverage_metrics())
+        metrics.update(self._compute_coverage_metrics(use_traditional))
         logger.info(f"覆盖率指标: {metrics}")
         
         # 插入evaluation_metrics
@@ -59,9 +64,17 @@ class EvaluationAgent(BaseAgent):
             "table": table_manager.EVALUATION_METRICS
         }
     
-    def _compute_coverage_metrics(self) -> Dict[str, float]:
+    def _compute_coverage_metrics(self, use_traditional: bool = False) -> Dict[str, float]:
         """计算覆盖率指标"""
         import json
+        
+        # 根据模式选择表
+        if use_traditional:
+            raw_table = TableManager.ASPECT_SENTIMENT_RAW_TRADITIONAL
+            valid_table = TableManager.ASPECT_SENTIMENT_VALID_TRADITIONAL
+        else:
+            raw_table = TableManager.ASPECT_SENTIMENT_RAW
+            valid_table = TableManager.ASPECT_SENTIMENT_VALID
         
         # 总句子数
         logger.debug("查询总句子数...")
@@ -87,60 +100,82 @@ class EvaluationAgent(BaseAgent):
         
         # 成功抽取的句子数（sentence_id去重）
         logger.debug("查询成功抽取的句子数...")
-        success_sentences_query = f"""
-            SELECT COUNT(DISTINCT sentence_id) FROM {TableManager.ASPECT_SENTIMENT_RAW}
-            WHERE run_id = ? AND parse_status = 'SUCCESS'
-        """
+        if use_traditional:
+            # 传统方法：所有记录都算成功（没有parse_status字段）
+            success_sentences_query = f"""
+                SELECT COUNT(DISTINCT sentence_id) FROM {raw_table}
+                WHERE run_id = ?
+            """
+        else:
+            # LLM方法：需要parse_status = 'SUCCESS'
+            success_sentences_query = f"""
+                SELECT COUNT(DISTINCT sentence_id) FROM {raw_table}
+                WHERE run_id = ? AND parse_status = 'SUCCESS'
+            """
         success_sentence_count = self.db.execute_read(
             success_sentences_query, {"run_id": self.run_id}
         )[0][0]
         logger.debug(f"成功抽取的句子数: {success_sentence_count}")
         
-        # 成功抽取的总aspect数（从llm_output中统计）
+        # 成功抽取的总aspect数
         logger.debug("统计成功抽取的总aspect数...")
-        aspects_query = f"""
-            SELECT llm_output, sentence_id FROM {TableManager.ASPECT_SENTIMENT_RAW}
-            WHERE run_id = ? AND parse_status = 'SUCCESS'
-        """
-        aspect_records = self.db.execute_read(aspects_query, {"run_id": self.run_id})
-        total_aspects_extracted = 0
-        parsed_count = 0
-        failed_parse_count = 0
-        sentences_with_aspects = 0
-        sentences_without_aspects = 0
-        
-        # 使用set确保每个sentence_id只统计一次（防止重复）
-        processed_sentence_ids = set()
-        
-        for (llm_output_json, sentence_id) in aspect_records:
-            # 检查是否已经处理过这个sentence_id（防止重复统计）
-            if sentence_id in processed_sentence_ids:
-                logger.warning(f"发现重复的sentence_id: {sentence_id}，跳过重复统计")
-                continue
-            processed_sentence_ids.add(sentence_id)
+        if use_traditional:
+            # 传统方法：直接统计记录数（每条记录一个aspect）
+            aspects_query = f"""
+                SELECT sentence_id FROM {raw_table}
+                WHERE run_id = ?
+            """
+            aspect_records = self.db.execute_read(aspects_query, {"run_id": self.run_id})
+            total_aspects_extracted = len(aspect_records)
+            parsed_count = total_aspects_extracted
+            failed_parse_count = 0
+            sentences_with_aspects = len(set(row[0] for row in aspect_records))
+            sentences_without_aspects = 0
+        else:
+            # LLM方法：从llm_output中统计
+            aspects_query = f"""
+                SELECT llm_output, sentence_id FROM {raw_table}
+                WHERE run_id = ? AND parse_status = 'SUCCESS'
+            """
+            aspect_records = self.db.execute_read(aspects_query, {"run_id": self.run_id})
+            total_aspects_extracted = 0
+            parsed_count = 0
+            failed_parse_count = 0
+            sentences_with_aspects = 0
+            sentences_without_aspects = 0
             
-            try:
-                if isinstance(llm_output_json, str):
-                    output = json.loads(llm_output_json)
-                else:
-                    output = llm_output_json
-                if isinstance(output, dict) and "aspects" in output:
-                    aspects = output.get("aspects", [])
-                    aspect_count = len(aspects) if isinstance(aspects, list) else 0
-                    total_aspects_extracted += aspect_count
-                    parsed_count += 1
-                    if aspect_count == 0:
-                        sentences_without_aspects += 1
-                        logger.debug(f"句子 {sentence_id} 的aspect列表为空（has_opinion可能为false）")
+            # 使用set确保每个sentence_id只统计一次（防止重复）
+            processed_sentence_ids = set()
+            
+            for (llm_output_json, sentence_id) in aspect_records:
+                # 检查是否已经处理过这个sentence_id（防止重复统计）
+                if sentence_id in processed_sentence_ids:
+                    logger.warning(f"发现重复的sentence_id: {sentence_id}，跳过重复统计")
+                    continue
+                processed_sentence_ids.add(sentence_id)
+                
+                try:
+                    if isinstance(llm_output_json, str):
+                        output = json.loads(llm_output_json)
                     else:
-                        sentences_with_aspects += 1
-                else:
+                        output = llm_output_json
+                    if isinstance(output, dict) and "aspects" in output:
+                        aspects = output.get("aspects", [])
+                        aspect_count = len(aspects) if isinstance(aspects, list) else 0
+                        total_aspects_extracted += aspect_count
+                        parsed_count += 1
+                        if aspect_count == 0:
+                            sentences_without_aspects += 1
+                            logger.debug(f"句子 {sentence_id} 的aspect列表为空（has_opinion可能为false）")
+                        else:
+                            sentences_with_aspects += 1
+                    else:
+                        failed_parse_count += 1
+                        logger.debug(f"句子 {sentence_id} 的llm_output格式异常: {type(output)}")
+                except (json.JSONDecodeError, TypeError) as e:
                     failed_parse_count += 1
-                    logger.debug(f"句子 {sentence_id} 的llm_output格式异常: {type(output)}")
-            except (json.JSONDecodeError, TypeError) as e:
-                failed_parse_count += 1
-                logger.debug(f"解析句子 {sentence_id} 的llm_output失败: {e}")
-                continue
+                    logger.debug(f"解析句子 {sentence_id} 的llm_output失败: {e}")
+                    continue
         
         logger.info(
             f"成功抽取的总aspect数: {total_aspects_extracted} "
@@ -151,7 +186,7 @@ class EvaluationAgent(BaseAgent):
         # VALID记录数（aspect级别）
         logger.debug("查询VALID记录数...")
         valid_query = f"""
-            SELECT COUNT(*) FROM {TableManager.ASPECT_SENTIMENT_VALID}
+            SELECT COUNT(*) FROM {valid_table}
             WHERE run_id = ? AND validity_label = 'VALID'
         """
         valid_count = self.db.execute_read(
@@ -162,7 +197,7 @@ class EvaluationAgent(BaseAgent):
         # 诊断：检查是否有真正的重复（sentence_id+aspect+issue组合）
         true_duplicate_check_query = f"""
             SELECT sentence_id, aspect_norm, issue_norm, COUNT(*) as cnt
-            FROM {TableManager.ASPECT_SENTIMENT_VALID}
+            FROM {valid_table}
             WHERE run_id = ? AND validity_label = 'VALID'
             GROUP BY sentence_id, aspect_norm, issue_norm
             HAVING COUNT(*) > 1
@@ -185,7 +220,7 @@ class EvaluationAgent(BaseAgent):
         duplicate_check_query = f"""
             SELECT sentence_id, aspect_norm, COUNT(*) as cnt,
                    COUNT(DISTINCT issue_norm) as distinct_issues
-            FROM {TableManager.ASPECT_SENTIMENT_VALID}
+            FROM {valid_table}
             WHERE run_id = ? AND validity_label = 'VALID'
             GROUP BY sentence_id, aspect_norm
             HAVING COUNT(*) > 1
@@ -225,7 +260,7 @@ class EvaluationAgent(BaseAgent):
         # 诊断：检查是否有重复的sentence_id（同一个句子被处理多次）
         sentence_duplicate_query = f"""
             SELECT sentence_id, COUNT(*) as cnt
-            FROM {TableManager.ASPECT_SENTIMENT_VALID}
+            FROM {valid_table}
             WHERE run_id = ? AND validity_label = 'VALID'
             GROUP BY sentence_id
             HAVING COUNT(*) > 10
@@ -256,7 +291,7 @@ class EvaluationAgent(BaseAgent):
         # 有至少一个VALID aspect的句子数
         logger.debug("查询有VALID aspect的句子数...")
         valid_sentences_query = f"""
-            SELECT COUNT(DISTINCT sentence_id) FROM {TableManager.ASPECT_SENTIMENT_VALID}
+            SELECT COUNT(DISTINCT sentence_id) FROM {valid_table}
             WHERE run_id = ? AND validity_label = 'VALID'
         """
         valid_sentence_count = self.db.execute_read(
