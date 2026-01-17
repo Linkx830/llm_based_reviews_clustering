@@ -4,3 +4,4 @@ data
 outputs
 main.ipynb
 __pycache__
+.pkl

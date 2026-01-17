@@ -3,7 +3,12 @@
 from typing import Dict, Any, List, Optional
 from collections import Counter, defaultdict
 import json
+import pickle
 import numpy as np
+from pathlib import Path
+import matplotlib
+matplotlib.use('Agg')  # 使用非交互式后端
+import matplotlib.pyplot as plt
 from .base_agent import BaseAgent
 from ..storage.table_manager import TableManager
 from ..tools.embedding_tool import EmbeddingTool
@@ -44,7 +49,7 @@ class IssueClusterAgent(BaseAgent):
         embedding_batch_size: int = 32,
         embedding_mrl_dimensions: Optional[int] = None,  # MRL维度裁剪
         clustering_config: Dict[str, Any] = None,
-        auto_select_threshold: int = 1000,
+        auto_select_threshold: int = 100,
         # 新聚类规范参数
         use_instruction: bool = True,
         issue_instruction: str = "Represent the underlying customer issue type for clustering. Texts should be close if they describe the same issue type, even with different wording.",
@@ -53,6 +58,9 @@ class IssueClusterAgent(BaseAgent):
         use_combined_vector: bool = False,  # 是否使用拼接向量（默认False，使用两阶段聚类）
         issue_weight: float = 0.8,  # 拼接向量时issue的权重
         aspect_weight: float = 0.2,  # 拼接向量时aspect的权重
+        # 两阶段聚类控制参数
+        enable_two_stage_clustering: bool = True,  # 是否启用两阶段聚类（默认True）
+        two_stage_threshold: float = 100.0,  # 两阶段聚类启用阈值（数据总数/aspect数 > 阈值才启用，默认100.0）
         # 阶段D：Reranker二次验证参数
         use_reranker: bool = False,  # 是否启用reranker二次验证
         reranker_model: Optional[str] = None,  # Reranker模型名称
@@ -80,6 +88,8 @@ class IssueClusterAgent(BaseAgent):
         self.use_combined_vector = use_combined_vector
         self.issue_weight = issue_weight
         self.aspect_weight = aspect_weight
+        self.enable_two_stage_clustering = enable_two_stage_clustering
+        self.two_stage_threshold = two_stage_threshold
         self.use_reranker = use_reranker
         self.reranker_top_k = reranker_top_k
         self.reranker_score_threshold = reranker_score_threshold
@@ -182,6 +192,68 @@ class IssueClusterAgent(BaseAgent):
         )
         
         return aspect_to_canonical
+    
+    def _save_condensed_tree(
+        self,
+        clustering_tool: ClusteringTool,
+        aspect_norm: str,
+        bucket_size: int
+    ):
+        """
+        保存HDBSCAN的压缩树信息为pickle格式，并生成压缩树图
+        
+        Args:
+            clustering_tool: ClusteringTool实例（包含HDBSCAN模型）
+            aspect_norm: 当前aspect名称（用于文件命名）
+            bucket_size: 桶大小
+        """
+        if clustering_tool.method != "hdbscan" or clustering_tool.model is None:
+            return
+        
+        try:
+            # 检查是否有condensed_tree属性
+            if not hasattr(clustering_tool.model, 'condensed_tree_'):
+                logger.warning(f"Aspect '{aspect_norm}': HDBSCAN模型没有condensed_tree_属性，跳过保存")
+                return
+            
+            condensed_tree = clustering_tool.model.condensed_tree_
+            
+            # 获取运行输出文件夹路径
+            output_dir = Path("outputs/runs") / self.run_id
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 创建clustering子文件夹用于存放聚类相关文件
+            clustering_dir = output_dir / "clustering"
+            clustering_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 清理aspect名称中的特殊字符，用于文件名
+            safe_aspect = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in aspect_norm)
+            safe_aspect = safe_aspect[:50]  # 限制文件名长度
+            
+            # 保存condensed tree为pickle
+            pickle_path = clustering_dir / f"condensed_tree_{safe_aspect}.pkl"
+            with open(pickle_path, "wb") as f:
+                pickle.dump(condensed_tree, f)
+            logger.info(f"Aspect '{aspect_norm}': 压缩树已保存到 {pickle_path}")
+            
+            # 生成压缩树图
+            try:
+                plt.figure(figsize=(12, 8))
+                # select_clusters=True 高亮HDBSCAN最终选出的簇
+                condensed_tree.plot(select_clusters=True)
+                plt.title(f"HDBSCAN Condensed Cluster Tree - Aspect: {aspect_norm}\nBucket Size: {bucket_size}")
+                plt.tight_layout()
+                
+                plot_path = clustering_dir / f"condensed_tree_{safe_aspect}.png"
+                plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+                plt.close()
+                logger.info(f"Aspect '{aspect_norm}': 压缩树图已保存到 {plot_path}")
+            except Exception as e:
+                logger.error(f"Aspect '{aspect_norm}': 生成压缩树图时出错: {str(e)}")
+                plt.close()  # 确保关闭图形
+                
+        except Exception as e:
+            logger.error(f"Aspect '{aspect_norm}': 保存压缩树时出错: {str(e)}")
     
     def _select_medoid(
         self, 
@@ -706,65 +778,181 @@ class IssueClusterAgent(BaseAgent):
             for aspect_norm in aspect_norms
         ])
         
-        # ========== 阶段C1：Aspect分桶（合并同义aspect） ==========
-        logger.info("阶段C1: Aspect分桶（合并同义aspect）")
-        aspect_to_canonical = self._merge_similar_aspects(
-            unique_aspects, 
-            unique_aspect_vectors
-        )
+        # ========== 决定是否使用两阶段聚类 ==========
+        use_two_stage = False  # 初始化为False，确保变量存在
+        if self.enable_two_stage_clustering:
+            # 计算数据总数/aspect数
+            unique_aspect_count = len(unique_aspects)
+            if unique_aspect_count > 0:
+                ratio = total_count / unique_aspect_count
+                if ratio > self.two_stage_threshold:
+                    use_two_stage = True
+                    logger.info(
+                        f"启用两阶段聚类: 数据总数={total_count}, aspect数={unique_aspect_count}, "
+                        f"比例={ratio:.2f} > 阈值={self.two_stage_threshold}"
+                    )
+                else:
+                    logger.info(
+                        f"跳过两阶段聚类: 数据总数={total_count}, aspect数={unique_aspect_count}, "
+                        f"比例={ratio:.2f} <= 阈值={self.two_stage_threshold}，直接对所有向量进行聚类"
+                    )
+            else:
+                logger.warning("aspect数为0，跳过两阶段聚类")
+        else:
+            logger.info("两阶段聚类已禁用，直接对所有向量进行聚类")
         
-        # 应用合并映射
-        canonical_aspects = [aspect_to_canonical.get(asp, asp) for asp in aspect_norms]
-        
-        # 按标准aspect分组
-        aspect_buckets = defaultdict(list)
-        for idx, canonical_aspect in enumerate(canonical_aspects):
-            aspect_buckets[canonical_aspect].append({
-                'index': idx,
-                'sentence_id': sentence_ids[idx],
-                'aspect_norm': canonical_aspect,
-                'original_aspect': aspect_norms[idx],
-                'issue_norm': issue_norms[idx],
-                'sentiment': sentiments[idx],
-                'issue_vector': issue_vectors[idx]
-            })
-        
-        logger.info(f"按aspect分桶: {len(aspect_buckets)} 个aspect桶")
-        for aspect, records in aspect_buckets.items():
-            logger.debug(f"  Aspect '{aspect}': {len(records)} 条记录")
-        
-        # ========== 阶段C2：桶内对Issue聚类 ==========
-        logger.info("阶段C2: 桶内对Issue聚类")
-        
-        all_labels = []
-        all_sentence_ids = []
-        all_aspect_norms = []
-        all_issue_norms = []
-        all_sentiments = []
-        all_vectors = []
-        global_cluster_id = 0  # 全局簇ID（跨aspect唯一）
-        
-        for canonical_aspect, records in aspect_buckets.items():
-            bucket_size = len(records)
+        if use_two_stage:
+            # ========== 阶段C1：Aspect分桶（合并同义aspect） ==========
+            logger.info("阶段C1: Aspect分桶（合并同义aspect）")
+            aspect_to_canonical = self._merge_similar_aspects(
+                unique_aspects, 
+                unique_aspect_vectors
+            )
             
-            if bucket_size < 2:
-                # 单个记录无法聚类，直接标记为簇
-                for record in records:
-                    all_labels.append(global_cluster_id)
-                    all_sentence_ids.append(record['sentence_id'])
-                    all_aspect_norms.append(record['aspect_norm'])
-                    all_issue_norms.append(record['issue_norm'])
-                    all_sentiments.append(record['sentiment'])
-                    all_vectors.append(record['issue_vector'])
-                global_cluster_id += 1
-                logger.debug(f"Aspect '{canonical_aspect}': 单样本，跳过聚类")
-                continue
+            # 应用合并映射
+            canonical_aspects = [aspect_to_canonical.get(asp, asp) for asp in aspect_norms]
             
-            # 提取该桶的issue向量
-            bucket_vectors = np.array([r['issue_vector'] for r in records])
+            # 按标准aspect分组
+            aspect_buckets = defaultdict(list)
+            for idx, canonical_aspect in enumerate(canonical_aspects):
+                aspect_buckets[canonical_aspect].append({
+                    'index': idx,
+                    'sentence_id': sentence_ids[idx],
+                    'aspect_norm': canonical_aspect,
+                    'original_aspect': aspect_norms[idx],
+                    'issue_norm': issue_norms[idx],
+                    'sentiment': sentiments[idx],
+                    'issue_vector': issue_vectors[idx]
+                })
+            
+            logger.info(f"按aspect分桶: {len(aspect_buckets)} 个aspect桶")
+            for aspect, records in aspect_buckets.items():
+                logger.debug(f"  Aspect '{aspect}': {len(records)} 条记录")
+            
+            # ========== 阶段C2：桶内对Issue聚类 ==========
+            logger.info("阶段C2: 桶内对Issue聚类")
+            
+            all_labels = []
+            all_sentence_ids = []
+            all_aspect_norms = []
+            all_issue_norms = []
+            all_sentiments = []
+            all_vectors = []
+            global_cluster_id = 0  # 全局簇ID（跨aspect唯一）
+            
+            for canonical_aspect, records in aspect_buckets.items():
+                bucket_size = len(records)
+                
+                if bucket_size < 2:
+                    # 单个记录无法聚类，直接标记为簇
+                    for record in records:
+                        all_labels.append(global_cluster_id)
+                        all_sentence_ids.append(record['sentence_id'])
+                        all_aspect_norms.append(record['aspect_norm'])
+                        all_issue_norms.append(record['issue_norm'])
+                        all_sentiments.append(record['sentiment'])
+                        all_vectors.append(record['issue_vector'])
+                    global_cluster_id += 1
+                    logger.debug(f"Aspect '{canonical_aspect}': 单样本，跳过聚类")
+                    continue
+                
+                # 提取该桶的issue向量
+                bucket_vectors = np.array([r['issue_vector'] for r in records])
+                
+                # 根据数据量选择聚类方法
+                if bucket_size < self.auto_select_threshold:
+                    method = "agglomerative"
+                else:
+                    method = "hdbscan"
+                
+                # 合并用户配置
+                final_config = {
+                    "method": method,
+                    **self.clustering_config
+                }
+                if "method" in self.clustering_config:
+                    final_config["method"] = self.clustering_config["method"]
+                
+                # 自适应参数（根据规范建议）
+                if method == "hdbscan":
+                    min_cluster_size = final_config.get("min_cluster_size")
+                    if min_cluster_size is None:
+                        # 根据规范：max(10, n * 0.005)
+                        final_config["min_cluster_size"] = max(10, int(bucket_size * 0.005))
+                    min_samples = final_config.get("min_samples", 3)
+                    final_config["min_samples"] = min_samples
+                elif method == "agglomerative":
+                    # Agglomerative使用distance_threshold自动确定簇数
+                    if "distance_threshold" not in final_config:
+                        final_config["distance_threshold"] = 0.5
+                
+                # 聚类
+                clustering_tool = ClusteringTool(**final_config)
+                # 使用cosine距离（向量已归一化，可以直接用）
+                labels = clustering_tool.fit(bucket_vectors)
+                
+                # 保存HDBSCAN压缩树（如果是HDBSCAN方法）
+                if clustering_tool.method == "hdbscan":
+                    self._save_condensed_tree(clustering_tool, canonical_aspect, bucket_size)
+                
+                # ========== 阶段D：Reranker边界精修（可选） ==========
+                if self.use_reranker and bucket_size >= 3:  # 至少3个样本才值得reranker
+                    bucket_cluster_texts = [
+                        self._build_cluster_text(record['aspect_norm'], record['issue_norm'])
+                        for record in records
+                    ]
+                    # 注意：这里需要在全局向量空间中搜索，但当前只有桶内向量
+                    # 简化实现：在桶内进行reranker精修
+                    labels = self._reranker_refinement(
+                        bucket_vectors,  # 使用桶内向量作为搜索空间
+                        labels,
+                        bucket_cluster_texts,
+                        bucket_vectors,
+                        list(range(len(records)))  # 桶内索引
+                    )
+                
+                # 将局部簇ID转换为全局簇ID
+                unique_local_labels = set(labels)
+                local_to_global = {}
+                for local_label in unique_local_labels:
+                    if local_label == -1:  # 噪声点
+                        local_to_global[-1] = -1
+                    else:
+                        local_to_global[local_label] = global_cluster_id
+                        global_cluster_id += 1
+                
+                # 转换标签并收集结果
+                for i, local_label in enumerate(labels):
+                    global_label = local_to_global[local_label]
+                    all_labels.append(global_label)
+                    all_sentence_ids.append(records[i]['sentence_id'])
+                    all_aspect_norms.append(records[i]['aspect_norm'])
+                    all_issue_norms.append(records[i]['issue_norm'])
+                    all_sentiments.append(records[i]['sentiment'])
+                    all_vectors.append(bucket_vectors[i])
+                
+                noise_count = sum(1 for l in labels if l == -1)
+                cluster_count = len(unique_local_labels) - (1 if -1 in unique_local_labels else 0)
+                logger.info(
+                    f"Aspect '{canonical_aspect}': {bucket_size} 条记录, "
+                    f"聚类得到 {cluster_count} 个簇, {noise_count} 个噪声点"
+                )
+            
+            # 转换为numpy数组
+            all_vectors = np.array(all_vectors)
+            all_labels = np.array(all_labels)
+        else:
+            # ========== 直接对所有向量进行聚类（跳过aspect分桶） ==========
+            logger.info("直接对所有向量进行聚类（跳过aspect分桶）")
+            
+            all_vectors = issue_vectors
+            all_sentence_ids = sentence_ids
+            all_aspect_norms = aspect_norms
+            all_issue_norms = issue_norms
+            all_sentiments = sentiments
             
             # 根据数据量选择聚类方法
-            if bucket_size < self.auto_select_threshold:
+            if total_count < self.auto_select_threshold:
                 method = "agglomerative"
             else:
                 method = "hdbscan"
@@ -782,7 +970,7 @@ class IssueClusterAgent(BaseAgent):
                 min_cluster_size = final_config.get("min_cluster_size")
                 if min_cluster_size is None:
                     # 根据规范：max(10, n * 0.005)
-                    final_config["min_cluster_size"] = max(10, int(bucket_size * 0.005))
+                    final_config["min_cluster_size"] = max(10, int(total_count * 0.005))
                 min_samples = final_config.get("min_samples", 3)
                 final_config["min_samples"] = min_samples
             elif method == "agglomerative":
@@ -793,54 +981,27 @@ class IssueClusterAgent(BaseAgent):
             # 聚类
             clustering_tool = ClusteringTool(**final_config)
             # 使用cosine距离（向量已归一化，可以直接用）
-            labels = clustering_tool.fit(bucket_vectors)
+            all_labels = clustering_tool.fit(all_vectors)
+            
+            # 保存HDBSCAN压缩树（如果是HDBSCAN方法）
+            if clustering_tool.method == "hdbscan":
+                self._save_condensed_tree(clustering_tool, "all_aspects", total_count)
             
             # ========== 阶段D：Reranker边界精修（可选） ==========
-            if self.use_reranker and bucket_size >= 3:  # 至少3个样本才值得reranker
-                bucket_cluster_texts = [
-                    self._build_cluster_text(record['aspect_norm'], record['issue_norm'])
-                    for record in records
-                ]
-                # 注意：这里需要在全局向量空间中搜索，但当前只有桶内向量
-                # 简化实现：在桶内进行reranker精修
-                labels = self._reranker_refinement(
-                    bucket_vectors,  # 使用桶内向量作为搜索空间
-                    labels,
-                    bucket_cluster_texts,
-                    bucket_vectors,
-                    list(range(len(records)))  # 桶内索引
+            if self.use_reranker and total_count >= 3:  # 至少3个样本才值得reranker
+                all_labels = self._reranker_refinement(
+                    all_vectors,  # 使用全局向量作为搜索空间
+                    all_labels,
+                    cluster_texts,
+                    all_vectors,
+                    list(range(total_count))  # 全局索引
                 )
-            
-            # 将局部簇ID转换为全局簇ID
-            unique_local_labels = set(labels)
-            local_to_global = {}
-            for local_label in unique_local_labels:
-                if local_label == -1:  # 噪声点
-                    local_to_global[-1] = -1
-                else:
-                    local_to_global[local_label] = global_cluster_id
-                    global_cluster_id += 1
-            
-            # 转换标签并收集结果
-            for i, local_label in enumerate(labels):
-                global_label = local_to_global[local_label]
-                all_labels.append(global_label)
-                all_sentence_ids.append(records[i]['sentence_id'])
-                all_aspect_norms.append(records[i]['aspect_norm'])
-                all_issue_norms.append(records[i]['issue_norm'])
-                all_sentiments.append(records[i]['sentiment'])
-                all_vectors.append(bucket_vectors[i])
-            
-            noise_count = sum(1 for l in labels if l == -1)
-            cluster_count = len(unique_local_labels) - (1 if -1 in unique_local_labels else 0)
-            logger.info(
-                f"Aspect '{canonical_aspect}': {bucket_size} 条记录, "
-                f"聚类得到 {cluster_count} 个簇, {noise_count} 个噪声点"
-            )
         
-        # 转换为numpy数组
-        all_vectors = np.array(all_vectors)
-        all_labels = np.array(all_labels)
+        # 转换为numpy数组（如果还没有转换）
+        if not isinstance(all_vectors, np.ndarray):
+            all_vectors = np.array(all_vectors)
+        if not isinstance(all_labels, np.ndarray):
+            all_labels = np.array(all_labels)
         
         total_clusters = len(set(all_labels)) - (1 if -1 in all_labels else 0)
         total_noise = sum(1 for l in all_labels if l == -1)
@@ -865,7 +1026,28 @@ class IssueClusterAgent(BaseAgent):
         # ========== 阶段E续：计算统计、选择medoid ==========
         logger.info("阶段E续: 计算簇统计、选择medoid")
         
-        # 计算簇统计
+        # 计算簇统计（如果final_config未定义，重新构建）
+        if 'final_config' not in locals():
+            if total_count < self.auto_select_threshold:
+                method = "agglomerative"
+            else:
+                method = "hdbscan"
+            final_config = {
+                "method": method,
+                **self.clustering_config
+            }
+            if "method" in self.clustering_config:
+                final_config["method"] = self.clustering_config["method"]
+            if method == "hdbscan":
+                min_cluster_size = final_config.get("min_cluster_size")
+                if min_cluster_size is None:
+                    final_config["min_cluster_size"] = max(10, int(total_count * 0.005))
+                min_samples = final_config.get("min_samples", 3)
+                final_config["min_samples"] = min_samples
+            elif method == "agglomerative":
+                if "distance_threshold" not in final_config:
+                    final_config["distance_threshold"] = 0.5
+        
         clustering_tool = ClusteringTool(**final_config)
         cluster_stats = clustering_tool.compute_cluster_stats(
             all_labels, all_vectors, all_sentiments, all_sentence_ids
@@ -901,7 +1083,9 @@ class IssueClusterAgent(BaseAgent):
             **final_config,
             "use_instruction": self.use_instruction,
             "aspect_similarity_threshold": self.aspect_similarity_threshold,
-            "two_stage_clustering": True
+            "two_stage_clustering": use_two_stage if 'use_two_stage' in locals() else False,
+            "enable_two_stage_clustering": self.enable_two_stage_clustering,
+            "two_stage_threshold": self.two_stage_threshold
         }
         clustering_config_id = json.dumps(final_config_with_meta, sort_keys=True)
         

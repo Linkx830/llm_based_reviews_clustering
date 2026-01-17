@@ -549,3 +549,4 @@ class TraditionalAspectSentimentExtractorAgent(BaseAgent):
         return evidence.lower() in target_sentence.lower()
 
 
+

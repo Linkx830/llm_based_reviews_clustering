@@ -4,12 +4,12 @@
 # 数据切片
 data_slice:
   # main_category: "Appliances"  # 可选
-  parent_asin: "B08YZ4YYRX"  # 可选，如果指定则只处理该商品
+  parent_asin: "B003M5L284"  # 可选，如果指定则只处理该商品
   time_window: null  # 可选: [start_timestamp, end_timestamp]
   filters:
     verified_purchase: null  # 可选: true/false
     min_helpful_vote: null  # 可选: 最小有用票数
-  # limit: 1000  # 可选: 限制评论数量
+  limit: 100  # 可选: 限制评论数量
 
 # 成本控制
 cost_control:
@@ -65,7 +65,7 @@ prompts:
 #   6. 阶段E：簇后处理（噪点簇和小簇处理、medoid选择、质量指标计算）
 clustering:
   # 聚类方法（可选，覆盖自动选择）
-  # method: "hdbscan"  # 可选：手动指定 "hdbscan" 或 "agglomerative"
+  method: "hdbscan"  # 可选：手动指定 "hdbscan" 或 "agglomerative"
   
   # HDBSCAN 参数（大数据集时使用）
   # min_cluster_size: 5  # 默认自适应：max(10, n*0.005)
@@ -91,6 +91,10 @@ clustering:
   # min_cluster_size: 2  # 最小簇大小（小于此值的簇将被处理，默认2）
   # noise_adsorption_threshold: 0.7  # 噪点吸附到最近簇的相似度阈值（默认0.7）
   # small_cluster_merge_threshold: 0.75  # 小簇合并的相似度阈值（默认0.75）
+  
+  # 两阶段聚类控制参数
+  enable_two_stage_clustering: true  # 是否启用两阶段聚类（默认true）
+  two_stage_threshold: 100.0  # 两阶段聚类启用阈值（数据总数/aspect数 > 阈值才启用，默认100.0）
 
 # Judge配置（ExtractionJudgeAgent的aspect归一化策略）
 judge:

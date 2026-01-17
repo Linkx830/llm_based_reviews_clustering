@@ -59,6 +59,16 @@ class ClusteringTool:
             min_cluster_size = self.kwargs.get("min_cluster_size", 5)
             min_samples = self.kwargs.get("min_samples", 3)
             metric = self.kwargs.get("metric", self.metric)
+            
+            # HDBSCAN的BallTree不支持'cosine'字符串，需要转换为可调用函数或使用'euclidean'
+            # 由于向量已归一化，使用'euclidean'等价于cosine距离（在归一化向量上）
+            if metric == "cosine":
+                # 对于归一化向量，euclidean距离与cosine距离等价（仅比例不同）
+                # euclidean^2 = 2 * (1 - cosine_similarity) = 2 * cosine_distance
+                # 这不会影响聚类结果，因为距离的相对顺序保持不变
+                logger.debug("HDBSCAN: 将'cosine'指标转换为'euclidean'（向量已归一化，结果等价）")
+                metric = "euclidean"
+            
             self.model = HDBSCAN(
                 min_cluster_size=min_cluster_size, 
                 min_samples=min_samples,

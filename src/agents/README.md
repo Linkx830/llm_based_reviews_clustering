@@ -128,6 +128,12 @@
        - `issue_instruction`: issue聚类的instruction文本（默认英文instruction）
        - `aspect_instruction`: aspect聚类的instruction文本（默认英文instruction）
        - `aspect_similarity_threshold`: aspect同义合并的相似度阈值（默认0.85）
+       - `enable_two_stage_clustering`: 是否启用两阶段聚类（默认True）
+       - `two_stage_threshold`: 两阶段聚类启用阈值（数据总数/aspect数 > 阈值才启用，默认100.0）
+         - 如果 `enable_two_stage_clustering=False`，直接对所有向量进行聚类（跳过aspect分桶）
+         - 如果 `enable_two_stage_clustering=True`，计算数据总数/aspect数：
+           - 如果比例 > `two_stage_threshold`，使用两阶段聚类（先aspect分桶，再桶内聚类）
+           - 如果比例 <= `two_stage_threshold`，直接对所有向量进行聚类
        - `use_reranker`: 是否启用reranker二次验证（默认False）
        - `reranker_model`: Reranker模型名称（可选）
        - `reranker_base_url`: Reranker API地址（可选，默认使用embedding_base_url）
@@ -150,6 +156,15 @@
        - 向量维度会自动检测（通过生成向量），表结构会自动创建或更新
        - 支持降维（通过`embedding_mrl_dimensions`参数），向量会存储为`FLOAT[N]`类型
        - 存储的向量是用于实际聚类的向量，已L2归一化，可用于后续的相似度搜索、可视化等任务
+     - **HDBSCAN压缩树保存**：
+       - 当使用HDBSCAN聚类时，会自动保存压缩树（condensed tree）信息
+       - 保存位置：`outputs/runs/<run_id>/clustering/`
+       - 文件格式：
+         - Pickle文件：`condensed_tree_<aspect>.pkl`（保存完整的condensed tree对象）
+         - 图片文件：`condensed_tree_<aspect>.png`（压缩树可视化图，DPI=300）
+       - 每个aspect桶会生成独立的压缩树文件（如果使用HDBSCAN）
+       - 压缩树图会高亮显示HDBSCAN最终选出的簇（`select_clusters=True`）
+       - 文件名中的aspect名称会进行安全化处理（去除特殊字符，限制长度）
 
 9. **ClusterInsightAgent**: 簇命名、摘要、建议（LLM生成）
    - 输入：cluster_stats, aspect_sentiment_valid, review_sentences

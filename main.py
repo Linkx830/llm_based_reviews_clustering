@@ -188,7 +188,10 @@ def create_pipeline(config: dict) -> Pipeline:
                 # 阶段E：噪点簇和小簇后处理参数
                 "min_cluster_size": config["clustering"].get("min_cluster_size", 2),
                 "noise_adsorption_threshold": config["clustering"].get("noise_adsorption_threshold", 0.7),
-                "small_cluster_merge_threshold": config["clustering"].get("small_cluster_merge_threshold", 0.75)
+                "small_cluster_merge_threshold": config["clustering"].get("small_cluster_merge_threshold", 0.75),
+                # 两阶段聚类控制参数
+                "enable_two_stage_clustering": config["clustering"].get("enable_two_stage_clustering", True),
+                "two_stage_threshold": config["clustering"].get("two_stage_threshold", 100.0)
             }
         ),
         PipelineStep(
@@ -287,6 +290,9 @@ def create_traditional_pipeline(config: dict) -> Pipeline:
                 "min_cluster_size": config["clustering"].get("min_cluster_size", 2),
                 "noise_adsorption_threshold": config["clustering"].get("noise_adsorption_threshold", 0.7),
                 "small_cluster_merge_threshold": config["clustering"].get("small_cluster_merge_threshold", 0.75),
+                # 两阶段聚类控制参数
+                "enable_two_stage_clustering": config["clustering"].get("enable_two_stage_clustering", True),
+                "two_stage_threshold": config["clustering"].get("two_stage_threshold", 100.0),
                 # 传统模式
                 "use_traditional_mode": True
             }

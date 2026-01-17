@@ -65,6 +65,7 @@ scores = reranker.rerank_pairs(
 clusterer_hdbscan = ClusteringTool(
     method="hdbscan",
     metric="cosine",  # 使用cosine距离（适用于已归一化的向量）
+    # 注意：HDBSCAN内部会将'cosine'自动转换为'euclidean'（向量已归一化时等价）
     min_cluster_size=5,
     min_samples=3
 )
@@ -102,6 +103,15 @@ labels = clusterer_agg.fit(vectors)
 - 本地GPU：`max_workers=8`（如果Ollama支持）
 - 本地CPU：`max_workers=4`
 - 远程服务器：`max_workers=2-4`（避免过载）
+
+## ClusteringTool 注意事项
+
+### HDBSCAN 指标转换
+- **'cosine' 指标自动转换**：由于 HDBSCAN 内部使用的 sklearn BallTree 不支持 'cosine' 字符串指标，当指定 `metric="cosine"` 时，会自动转换为 `"euclidean"`
+- **数学等价性**：对于已归一化的向量（L2 normalized），euclidean 距离与 cosine 距离在聚类结果上等价
+  - euclidean² = 2 × (1 - cosine_similarity) = 2 × cosine_distance
+  - 距离的相对顺序保持不变，因此聚类结果相同
+- **其他方法**：AgglomerativeClustering 和 DBSCAN 直接支持 'cosine' 指标，无需转换
 
 ## RerankerTool 使用说明
 

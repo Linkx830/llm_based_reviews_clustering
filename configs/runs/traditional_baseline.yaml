@@ -5,12 +5,12 @@
 # 数据切片（与LLM方法保持一致，保证公平对比）
 data_slice:
   # main_category: "Appliances"  # 可选
-  parent_asin: "B00GN92KQ4"  # 可选，如果指定则只处理该商品
+  parent_asin: "B0051OKX2U"  # 可选，如果指定则只处理该商品
   time_window: null  # 可选: [start_timestamp, end_timestamp]
   filters:
     verified_purchase: null  # 可选: true/false
     min_helpful_vote: null  # 可选: 最小有用票数
-  # limit: 1000  # 可选: 限制评论数量
+  limit: 100  # 可选: 限制评论数量
 
 # 成本控制（传统方法不需要LLM调用，但保留此配置块以保持一致性）
 cost_control:
@@ -68,6 +68,10 @@ clustering:
   # min_cluster_size: 2  # 最小簇大小（小于此值的簇将被处理，默认2）
   # noise_adsorption_threshold: 0.7  # 噪点吸附到最近簇的相似度阈值（默认0.7）
   # small_cluster_merge_threshold: 0.75  # 小簇合并的相似度阈值（默认0.75）
+  
+  # 两阶段聚类控制参数
+  enable_two_stage_clustering: true  # 是否启用两阶段聚类（默认true）
+  two_stage_threshold: 100.0  # 两阶段聚类启用阈值（数据总数/aspect数 > 阈值才启用，默认100.0）
 
 # Judge配置（TraditionalExtractionJudgeAgent的aspect归一化策略）
 judge:
@@ -155,5 +159,6 @@ run:
   run_id: null  # 自动生成
   pipeline_version: "traditional_v1.0"  # 传统方法pipeline版本
   use_traditional: true  # 启用传统baseline模式（关键配置）
+
 
 
